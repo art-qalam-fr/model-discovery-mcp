@@ -1,0 +1,27 @@
+{
+  "name": "model-discovery-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for real-time free model discovery and supplier pinging",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "model-discovery",
+    "llm",
+    "ai"
+  ],
+  "author": "Konnor",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "axios": "^1.7.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.2",
+    "typescript": "^5.4.5"
+  }
+}
