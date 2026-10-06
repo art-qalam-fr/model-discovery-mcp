@@ -12,7 +12,7 @@
 # model-discovery-mcp
 
 Serveur MCP de **découverte de modèles en temps réel** : interroge les
-catalogues des providers configurés (NVIDIA NIM, OpenRouter, Mistral, Groq…)
+catalogues des providers configurés (NVIDIA NIM, Ollama Cloud, OpenRouter `:free`…)
 et teste leur disponibilité pour connaître les modèles réellement utilisables.
 
 ## Installation
@@ -29,7 +29,7 @@ npm install && npm run build
 ## Configuration
 
 Les clés provider se passent par variables d'environnement
-(`NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`…).
+(`NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`…).
 Un provider sans clé est simplement ignoré.
 
 Licence MIT.

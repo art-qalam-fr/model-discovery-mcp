@@ -183,7 +183,7 @@ const server = new McpServer(
 // Outil pour pinger un fournisseur spécifique et vérifier la disponibilité d'un modèle
 server.tool(
   "ping-supplier",
-  "Vérifie en temps réel la disponibilité d'un fournisseur (nim par défaut ; nim2 | ollama | ollama-cloud | openrouter | hf supportés — groq retiré, plus de free tier)",
+  "Vérifie en temps réel la disponibilité d'un fournisseur (nim par défaut ; nim2 | ollama | ollama-cloud | openrouter | hf supportés)",
   {
     supplier: z.string().optional().describe("nim (defaut) | nim2 | ollama | ollama-cloud | openrouter | hf")
   },
