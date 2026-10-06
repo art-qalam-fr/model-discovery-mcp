@@ -23,62 +23,8 @@ const server = new McpServer(
     "model://available/free",
     async () => {
       let allModels: any[] = [];
-      
-      // 1. Essayer de récupérer les modèles locaux depuis Ollama
-    // /api/tags liste aussi les modèles :cloud -> peut prendre >30s
-    try {
-      const ollamaResponse = await axios.get("http://localhost:11434/api/tags", { timeout: 45000 });
-      if (ollamaResponse.data && ollamaResponse.data.models) {
-        const ollamaModels = ollamaResponse.data.models.map((model: any) => ({
-          id: model.name,
-          name: model.name,
-          description: `Local Ollama model${model.details?.family ? ` (${model.details.family})` : ""}${model.details?.parameter_size ? ` ${model.details.parameter_size}` : ""}`,
-          context_length: 0, // Ollama API doesn't provide context length directly; could be inferred from model but not available here
-          architecture: {
-            modality: "text->text", // Simplification; Ollama models can be multimodal but we don't have that info easily
-            input_modalities: ["text"],
-            output_modalities: ["text"],
-            tokenizer: model.details?.tokenizer || "Unknown",
-            instruct_type: null
-          }
-        }));
-        allModels = [...allModels, ...ollamaModels];
-      }
-    } catch (ollamaError: any) {
-      // Ollama not available or error, continue with OpenRouter only
-      console.warn("Could not fetch Ollama models:", ollamaError.message);
-    }
-    
-    // 2. Récupérer les modèles gratuits depuis OpenRouter
-    try {
-      const openrouterResponse = await axios.get("https://openrouter.ai/api/v1/models", {
-        timeout: 5000
-      });
-      
-      const models = openrouterResponse.data.data || [];
-      
-      // Filtrer pour ne garder que les modèles réellement gratuits (prix = 0)
-      const freeModels = models
-        .filter((model: any) => 
-          !!model.pricing && 
-          model.pricing.prompt === "0" && 
-          model.pricing.completion === "0"
-        )
-        .map((model: any) => ({
-          id: model.id,
-          name: model.name || model.id,
-          description: model.description || "",
-          context_length: model.context_length || 0,
-          architecture: model.architecture || {}
-        }));
-      
-      allModels = [...allModels, ...freeModels];
-    } catch (openrouterError: any) {
-      console.warn("Could not fetch OpenRouter models:", openrouterError.message);
-      // If both fail, we'll return what we have (possibly just Ollama)
-    }
 
-    // 3. Catalogue NVIDIA NIM servi au compte (clé en env utilisateur)
+    // 1. Catalogue NVIDIA NIM compte 1 — priorité haute (clé NVIDIA_API_KEY)
     try {
       const nimBase = process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1";
       const nimKey = process.env.NVIDIA_API_KEY;
@@ -88,9 +34,9 @@ const server = new McpServer(
           headers: { Authorization: `Bearer ${nimKey}` }
         });
         const nimModels = (nimResponse.data.data || []).map((m: any) => ({
-          id: m.id,
+          id: `nim/${m.id}`,
           name: m.id,
-          description: `NVIDIA NIM${m.owned_by ? ` (${m.owned_by})` : ""}`,
+          description: `NVIDIA NIM (compte 1)${m.owned_by ? ` (${m.owned_by})` : ""}`,
           context_length: 0,
           architecture: {
             modality: "text->text",
@@ -106,18 +52,19 @@ const server = new McpServer(
       console.warn("Could not fetch NVIDIA NIM models:", nimError.message);
     }
 
-    // 4. Catalogue Groq (cle en env utilisateur, OpenAI-compatible)
+    // 2. Catalogue NVIDIA NIM compte 2 — fallback du compte 1 (NVIDIA_API_KEY_2)
     try {
-      const groqKey = process.env.GROQ_API_KEY;
-      if (groqKey) {
-        const groqResponse = await axios.get("https://api.groq.com/openai/v1/models", {
+      const nimBase = process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1";
+      const nimKey2 = process.env.NVIDIA_API_KEY_2;
+      if (nimKey2) {
+        const nimResponse = await axios.get(`${nimBase}/models`, {
           timeout: 15000,
-          headers: { Authorization: `Bearer ${groqKey}` }
+          headers: { Authorization: `Bearer ${nimKey2}` }
         });
-        const groqModels = (groqResponse.data.data || []).map((m: any) => ({
-          id: `groq/${m.id}`,
+        const nimModels = (nimResponse.data.data || []).map((m: any) => ({
+          id: `nim2/${m.id}`,
           name: m.id,
-          description: "Groq",
+          description: `NVIDIA NIM (compte 2)${m.owned_by ? ` (${m.owned_by})` : ""}`,
           context_length: 0,
           architecture: {
             modality: "text->text",
@@ -127,10 +74,65 @@ const server = new McpServer(
             instruct_type: null
           }
         }));
-        allModels = [...allModels, ...groqModels];
+        allModels = [...allModels, ...nimModels];
       }
-    } catch (groqError: any) {
-      console.warn("Could not fetch Groq models:", groqError.message);
+    } catch (nim2Error: any) {
+      console.warn("Could not fetch NVIDIA NIM2 models:", nim2Error.message);
+    }
+
+    // 3. Ollama — modèles :cloud tagués ollama-cloud ; locaux réservés à l'utilisateur
+    // /api/tags liste aussi les modèles :cloud -> peut prendre >30s
+    try {
+      const ollamaResponse = await axios.get("http://localhost:11434/api/tags", { timeout: 45000 });
+      if (ollamaResponse.data && ollamaResponse.data.models) {
+        const ollamaModels = ollamaResponse.data.models.map((model: any) => {
+          const isCloud = model.name.endsWith(":cloud") || model.name.endsWith("-cloud");
+          return {
+            id: isCloud ? `ollama-cloud/${model.name}` : model.name,
+            name: model.name,
+            description: `${isCloud ? "Ollama Cloud" : "Local Ollama"} model${model.details?.family ? ` (${model.details.family})` : ""}${model.details?.parameter_size ? ` ${model.details.parameter_size}` : ""}`,
+            context_length: 0,
+            architecture: {
+              modality: "text->text",
+              input_modalities: ["text"],
+              output_modalities: ["text"],
+              tokenizer: model.details?.tokenizer || "Unknown",
+              instruct_type: null
+            }
+          };
+        });
+        allModels = [...allModels, ...ollamaModels];
+      }
+    } catch (ollamaError: any) {
+      // Ollama not available or error, continue with OpenRouter only
+      console.warn("Could not fetch Ollama models:", ollamaError.message);
+    }
+
+    // 4. OpenRouter :free — supplément de dernier recours
+    try {
+      const openrouterResponse = await axios.get("https://openrouter.ai/api/v1/models", {
+        timeout: 5000
+      });
+
+      const models = openrouterResponse.data.data || [];
+
+      const freeModels = models
+        .filter((model: any) =>
+          !!model.pricing &&
+          model.pricing.prompt === "0" &&
+          model.pricing.completion === "0"
+        )
+        .map((model: any) => ({
+          id: model.id,
+          name: model.name || model.id,
+          description: model.description || "",
+          context_length: model.context_length || 0,
+          architecture: model.architecture || {}
+        }));
+
+      allModels = [...allModels, ...freeModels];
+    } catch (openrouterError: any) {
+      console.warn("Could not fetch OpenRouter models:", openrouterError.message);
     }
 
     // 5. Catalogue HuggingFace router (cle en env utilisateur, OpenAI-compatible)
@@ -181,17 +183,20 @@ const server = new McpServer(
 // Outil pour pinger un fournisseur spécifique et vérifier la disponibilité d'un modèle
 server.tool(
   "ping-supplier",
-  "Vérifie en temps réel la disponibilité d'un fournisseur (openrouter par défaut ; ollama | nim | nim2 | groq | hf supportés)",
+  "Vérifie en temps réel la disponibilité d'un fournisseur (nim par défaut ; nim2 | ollama | ollama-cloud | openrouter | hf supportés — groq retiré, plus de free tier)",
   {
-    supplier: z.string().optional().describe("openrouter (defaut) | ollama | nim | nim2 | groq | hf")
+    supplier: z.string().optional().describe("nim (defaut) | nim2 | ollama | ollama-cloud | openrouter | hf")
   },
   async (args: any, extra) => {
-    const supplier = (args?.supplier || "openrouter").toLowerCase();
+    const supplier = (args?.supplier || "nim").toLowerCase();
     try {
-      if (supplier === "ollama") {
+      if (supplier === "ollama" || supplier === "ollama-cloud") {
         const started = Date.now();
         const r = await axios.get("http://localhost:11434/api/tags", { timeout: 45000 });
-        const models = (r.data?.models || []).map((m: any) => ({ id: m.name, name: m.name }));
+        let models = (r.data?.models || []).map((m: any) => ({ id: m.name, name: m.name }));
+        if (supplier === "ollama-cloud") {
+          models = models.filter((m: any) => m.id.endsWith(":cloud") || m.id.endsWith("-cloud"));
+        }
         return {
           content: [{ type: "text", text: JSON.stringify({
             supplier, available: true, latencyMs: Date.now() - started,
@@ -209,21 +214,6 @@ server.tool(
           timeout: 15000, headers: { Authorization: `Bearer ${nimKey}` }
         });
         const models = (r.data?.data || []).map((m: any) => ({ id: m.id, name: m.id }));
-        return {
-          content: [{ type: "text", text: JSON.stringify({
-            supplier, available: true, latencyMs: Date.now() - started,
-            modelCount: models.length, models: models.slice(0, 50),
-            timestamp: new Date().toISOString() }, null, 2) }]
-        };
-      }
-      if (supplier === "groq") {
-        const groqKey = process.env.GROQ_API_KEY;
-        if (!groqKey) throw new Error("GROQ_API_KEY absente de l'env");
-        const started = Date.now();
-        const r = await axios.get("https://api.groq.com/openai/v1/models", {
-          timeout: 15000, headers: { Authorization: `Bearer ${groqKey}` }
-        });
-        const models = (r.data?.data || []).map((m: any) => ({ id: `groq/${m.id}`, name: m.id }));
         return {
           content: [{ type: "text", text: JSON.stringify({
             supplier, available: true, latencyMs: Date.now() - started,
