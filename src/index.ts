@@ -3,6 +3,7 @@ import { z } from "zod";
 import axios from "axios";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import fsSync from "node:fs";
 
 const server = new McpServer(
   {
@@ -279,6 +280,81 @@ server.tool(
           }
         ]
       };
+    }
+  }
+);
+
+// Ping d'inférence réel par modèle — POST /chat/completions max_tokens=1.
+// Couvre toute la chaîne : nim|nim2 (NVIDIA), openrouter, kilo (gateway kilocode),
+// nous (routeur free Hermes — token OAuth lu depuis auth.json), ollama (local).
+// C'est la mesure qui alimente model_health : le catalogue ping-supplier prouve
+// que le fournisseur répond, ping-model prouve que LE MODÈLE infère.
+const MODEL_PING_ENDPOINTS: Record<string, () => { url: string; key?: string } | { error: string }> = {
+  nim: () => ({ url: `${process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1"}/chat/completions`, key: process.env.NVIDIA_API_KEY }),
+  nim2: () => ({ url: `${process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1"}/chat/completions`, key: process.env.NVIDIA_API_KEY_2 }),
+  openrouter: () => ({ url: "https://openrouter.ai/api/v1/chat/completions", key: process.env.OPENROUTER_API_KEY }),
+  "openrouter-free": () => ({ url: "https://openrouter.ai/api/v1/chat/completions", key: process.env.OPENROUTER_API_KEY }),
+  kilo: () => ({ url: "https://api.kilo.ai/api/gateway/chat/completions", key: process.env.KILO_API_KEY }),
+  nous: () => {
+    try {
+      const p = `${process.env.LOCALAPPDATA || ""}/hermes/auth.json`;
+      const auth = JSON.parse(fsSync.readFileSync(p, "utf-8"));
+      const tok = auth?.providers?.nous?.access_token;
+      if (!tok) return { error: "nous access_token absent de hermes/auth.json" };
+      return { url: "https://inference-api.nousresearch.com/v1/chat/completions", key: tok };
+    } catch (e: any) { return { error: `nous auth: ${e.message}` }; }
+  },
+  ollama: () => ({ url: "http://localhost:11434/v1/chat/completions" }),
+};
+
+server.tool(
+  "ping-model",
+  "Ping d'inférence réel sur un modèle précis (max_tokens=1) — latence + disponibilité. supplier: nim|nim2|openrouter|kilo|nous|ollama",
+  {
+    supplier: z.string().describe("nim | nim2 | openrouter | kilo | nous | ollama"),
+    model: z.string().describe("model_id exact envoyé à l'API (ex: nvidia/nemotron-3-super-120b-a12b)"),
+    timeout_ms: z.number().optional().describe("timeout en ms (défaut 20000)")
+  },
+  async (args: any) => {
+    const supplier = String(args.supplier || "").toLowerCase();
+    const model = String(args.model || "");
+    const timeout = args.timeout_ms || 20000;
+    const resolver = MODEL_PING_ENDPOINTS[supplier];
+    if (!resolver) {
+      return { content: [{ type: "text", text: JSON.stringify({ available: false, error: `supplier inconnu: ${supplier}` }) }] };
+    }
+    const ep = resolver();
+    if ("error" in ep) {
+      return { content: [{ type: "text", text: JSON.stringify({ supplier, model, available: false, error: ep.error, timestamp: new Date().toISOString() }) }] };
+    }
+    const started = Date.now();
+    try {
+      const r = await axios.post(ep.url, {
+        model,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 1,
+        stream: false
+      }, {
+        timeout,
+        headers: {
+          "Content-Type": "application/json",
+          ...(ep.key ? { Authorization: `Bearer ${ep.key}` } : {})
+        },
+        validateStatus: () => true
+      });
+      const latencyMs = Date.now() - started;
+      const ok = r.status >= 200 && r.status < 300;
+      const errBody = ok ? undefined : (typeof r.data === "object" ? JSON.stringify(r.data).slice(0, 300) : String(r.data).slice(0, 300));
+      return { content: [{ type: "text", text: JSON.stringify({
+        supplier, model, available: ok, status: r.status, latencyMs,
+        error: errBody, timestamp: new Date().toISOString()
+      }, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: "text", text: JSON.stringify({
+        supplier, model, available: false, latencyMs: Date.now() - started,
+        error: e.code === "ECONNABORTED" ? `timeout ${timeout}ms` : String(e.message || e),
+        timestamp: new Date().toISOString()
+      }) }] };
     }
   }
 );
